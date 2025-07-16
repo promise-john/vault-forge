@@ -248,3 +248,89 @@
     ERR-NO-PRICE-DATA
   )
 )
+
+;; CORE PROTOCOL FUNCTIONS
+
+(define-public (create-position
+    (btc-amount uint)
+    (stable-amount uint)
+  )
+  ;; Create new collateralized debt position or expand existing one
+  (begin
+    (asserts! (not (var-get protocol-paused)) ERR-PROTOCOL-PAUSED)
+    (asserts! (>= btc-amount u0) ERR-INVALID-AMOUNT)
+    (asserts! (>= stable-amount MINIMUM_LOAN_AMOUNT) ERR-MINIMUM-LOAN-REQUIRED)
+    (let (
+        (btc-price (try! (get-current-price)))
+        (user tx-sender)
+        (existing-position (map-get? positions user))
+      )
+      (begin
+        (accrue-global-interest)
+        (let ((current-position (if (is-some existing-position)
+            (accrue-position-interest user)
+            {
+              collateral: u0,
+              debt: u0,
+              last-update-block: stacks-block-height,
+            }
+          )))
+          (let (
+              (old-collateral (get collateral current-position))
+              (old-debt (get debt current-position))
+              (new-collateral (+ old-collateral btc-amount))
+              (new-debt (+ old-debt stable-amount))
+              (min-required-collateral (required-collateral new-debt btc-price))
+            )
+            (begin
+              (asserts!
+                (>= (collateral-value new-collateral btc-price)
+                  min-required-collateral
+                )
+                ERR-INSUFFICIENT-COLLATERAL
+              )
+              (map-set positions user {
+                collateral: new-collateral,
+                debt: new-debt,
+                last-update-block: stacks-block-height,
+              })
+              (var-set total-collateral (+ (var-get total-collateral) btc-amount))
+              (var-set total-debt (+ (var-get total-debt) stable-amount))
+              (ft-mint? stable-usd stable-amount user)
+            )
+          )
+        )
+      )
+    )
+  )
+)
+
+(define-public (add-collateral (btc-amount uint))
+  ;; Add additional BTC collateral to existing position
+  (let (
+      (user tx-sender)
+      (position (unwrap! (map-get? positions user) ERR-POSITION-NOT-FOUND))
+    )
+    (begin
+      (asserts! (not (var-get protocol-paused)) ERR-PROTOCOL-PAUSED)
+      (asserts! (> btc-amount u0) ERR-INVALID-AMOUNT)
+      (accrue-global-interest)
+      (let (
+          (updated-position (accrue-position-interest user))
+          (new-debt (get debt updated-position))
+          (current-collateral (get collateral updated-position))
+          (new-collateral (+ current-collateral btc-amount))
+        )
+        (begin
+          (map-set positions user {
+            collateral: new-collateral,
+            debt: new-debt,
+            last-update-block: stacks-block-height,
+          })
+          (var-set total-collateral (+ (var-get total-collateral) btc-amount))
+          (ok true)
+        )
+      )
+    )
+  )
+)

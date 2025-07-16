@@ -85,3 +85,89 @@
 ;; SYNTHETIC USD TOKEN DEFINITION
 
 (define-fungible-token stable-usd)
+
+;; ADMINISTRATIVE FUNCTIONS
+
+(define-public (set-protocol-owner (new-owner principal))
+  ;; Transfer protocol ownership to a new address
+  (begin
+    (asserts! (is-eq tx-sender (var-get protocol-owner)) ERR-NOT-AUTHORIZED)
+    (ok (var-set protocol-owner new-owner))
+  )
+)
+
+(define-public (pause-protocol (paused bool))
+  ;; Emergency pause mechanism for protocol operations
+  (begin
+    (asserts! (is-eq tx-sender (var-get protocol-owner)) ERR-NOT-AUTHORIZED)
+    (ok (var-set protocol-paused paused))
+  )
+)
+
+(define-public (update-btc-price
+    (price uint)
+    (timestamp uint)
+  )
+  ;; Update BTC/USD price feed from authorized oracle
+  (begin
+    (asserts! (is-eq tx-sender (var-get protocol-owner)) ERR-NOT-AUTHORIZED)
+    (asserts! (> price u0) ERR-INVALID-AMOUNT)
+    (var-set btc-price-in-usd
+      (some {
+        price: price,
+        timestamp: timestamp,
+      })
+    )
+    (ok true)
+  )
+)
+
+(define-public (set-current-time (time uint))
+  ;; Set current timestamp for testing environment
+  (begin
+    (asserts! (is-eq tx-sender (var-get protocol-owner)) ERR-NOT-AUTHORIZED)
+    (ok (var-set current-time time))
+  )
+)
+
+;; CORE CALCULATION UTILITIES
+
+(define-private (collateral-value
+    (collateral-amount uint)
+    (price uint)
+  )
+  ;; Calculate USD value of BTC collateral
+  (* collateral-amount price)
+)
+
+(define-private (required-collateral
+    (debt-amount uint)
+    (price uint)
+  )
+  ;; Calculate minimum BTC collateral required for debt amount
+  (/ (* debt-amount COLLATERAL-RATIO) (/ price u100))
+)
+
+(define-private (is-position-safe
+    (user principal)
+    (btc-price uint)
+  )
+  ;; Verify if position meets minimum collateralization requirements
+  (let (
+      (position (unwrap! (map-get? positions user) false))
+      (debt (get debt position))
+      (collateral (get collateral position))
+      (collateral-value-usd (collateral-value collateral btc-price))
+      (min-collateral-value-usd (/ (* debt COLLATERAL-RATIO) u100))
+    )
+    (>= collateral-value-usd min-collateral-value-usd)
+  )
+)
+
+(define-private (calculate-interest
+    (debt uint)
+    (blocks-passed uint)
+  )
+  ;; Calculate compound interest accrued over block periods
+  (/ (* debt (* blocks-passed INTEREST_RATE_PER_BLOCK)) INTEREST_RATE_DENOMINATOR)
+)
